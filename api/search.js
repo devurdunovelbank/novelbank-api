@@ -1,12 +1,10 @@
 const { Pool } = require('pg');
 
-// Direct Database Connection!
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL
 });
 
 export default async function handler(req, res) {
-  // CORS Headers for Blogger
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -17,19 +15,27 @@ export default async function handler(req, res) {
   const { query, offset = 0 } = req.query;
 
   if (!process.env.DATABASE_URL) {
-      return res.status(500).json({ error: "Vercel mein DATABASE_URL missing hai!" });
+      return res.status(500).json({ error: "DATABASE_URL is missing!" });
   }
 
   try {
     if (query) {
-      // Super Fast ILIKE Search (Case Insensitive)
-      const sql = `SELECT "Titles", "Links" FROM novels WHERE "Titles" ILIKE $1 LIMIT 50;`;
-      const values = [`%${query}%`];
+      // THE MAGIC: Postgres Fuzzy Search (Trigram) + Exact Match Combine
+      // Ye spelling mistakes aur aage peeche words ko Fuse.js ki tarah handle karega
+      const sql = `
+        SELECT "Titles", "Links", similarity("Titles", $1) as score
+        FROM novels 
+        WHERE "Titles" ILIKE $2 
+           OR similarity("Titles", $1) > 0.15
+        ORDER BY score DESC 
+        LIMIT 50;
+      `;
+      const values = [query, `%${query}%`];
       const result = await pool.query(sql, values);
       
       return res.status(200).json({ data: result.rows, total: result.rows.length });
     } else {
-      // Fast Loading for Library Pagination
+      // Normal loading logic
       const sql = `SELECT "Titles", "Links" FROM novels LIMIT 21 OFFSET $1;`;
       const values = [parseInt(offset)];
       const result = await pool.query(sql, values);
