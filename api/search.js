@@ -1,5 +1,12 @@
+const { Pool } = require('pg');
+
+// Direct Database Connection!
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL
+});
+
 export default async function handler(req, res) {
-  // CORS Headers
+  // CORS Headers for Blogger
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -8,53 +15,28 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const { query, offset = 0 } = req.query;
-  const XATA_API_KEY = process.env.XATA_API_KEY;
-  const XATA_REST_URL = process.env.XATA_REST_URL;
 
-  if (!XATA_API_KEY || !XATA_REST_URL) {
-      return res.status(500).json({ error: "Missing Keys in Vercel. Please add Environment Variables." });
+  if (!process.env.DATABASE_URL) {
+      return res.status(500).json({ error: "Vercel mein DATABASE_URL missing hai!" });
   }
 
   try {
-    const endpoint = query ? `${XATA_REST_URL}/search` : `${XATA_REST_URL}/sql`;
-    const bodyData = query 
-      ? { query: query, tables: ["novels"], fuzziness: 1, prefix: "phrase" }
-      : { statement: `SELECT "Titles", "Links" FROM novels LIMIT 21 OFFSET ${parseInt(offset)};` };
-
-    const fetchRes = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${XATA_API_KEY}`
-      },
-      body: JSON.stringify(bodyData)
-    });
-
-    // Pehle response ko simple text mein parhein taake HTML aaye to system crash na ho
-    const textResponse = await fetchRes.text(); 
-
-    try {
-        const data = JSON.parse(textResponse);
-        
-        if (!fetchRes.ok) {
-           return res.status(fetchRes.status).json({ error: "Xata API Error", details: data });
-        }
-        
-        if (query) {
-            const results = data.records ? data.records.map(r => ({ Titles: r.Titles, Links: r.Links })) : [];
-            return res.status(200).json({ data: results, total: results.length });
-        } else {
-            return res.status(200).json({ data: data.records || [], total: 78500 });
-        }
-    } catch (parseError) {
-        // Agar dobara URL ki galti hui aur Xata ne HTML bheja, to ye asaan lafzon mein batayega
-        return res.status(500).json({ 
-            error: "Invalid Xata URL", 
-            message: "Xata ne database nahi dhoonda. Apne Vercel mein XATA_REST_URL check karein.",
-            url_used: endpoint
-        });
+    if (query) {
+      // Super Fast ILIKE Search (Case Insensitive)
+      const sql = `SELECT "Titles", "Links" FROM novels WHERE "Titles" ILIKE $1 LIMIT 50;`;
+      const values = [`%${query}%`];
+      const result = await pool.query(sql, values);
+      
+      return res.status(200).json({ data: result.rows, total: result.rows.length });
+    } else {
+      // Fast Loading for Library Pagination
+      const sql = `SELECT "Titles", "Links" FROM novels LIMIT 21 OFFSET $1;`;
+      const values = [parseInt(offset)];
+      const result = await pool.query(sql, values);
+      
+      return res.status(200).json({ data: result.rows, total: 78500 });
     }
   } catch (error) {
-    return res.status(500).json({ error: 'Server Network Error', message: error.message });
+    return res.status(500).json({ error: 'Database Query Error', message: error.message });
   }
 }
