@@ -20,22 +20,25 @@ export default async function handler(req, res) {
 
   try {
     if (query) {
-      // THE MAGIC: Postgres Fuzzy Search (Trigram) + Exact Match Combine
-      // Ye spelling mistakes aur aage peeche words ko Fuse.js ki tarah handle karega
+      // THE FIX: word_similarity() acts exactly like Fuse.js substring matching
+      // Exact word match ya start hone walay words hamesha Top par aayenge!
       const sql = `
-        SELECT "Titles", "Links", similarity("Titles", $1) as score
+        SELECT "Titles", "Links", 
+               word_similarity($1, "Titles") as score
         FROM novels 
         WHERE "Titles" ILIKE $2 
-           OR similarity("Titles", $1) > 0.15
-        ORDER BY score DESC 
+           OR word_similarity($1, "Titles") > 0.15
+        ORDER BY 
+           "Titles" ILIKE $3 DESC,  -- Agar exactly wahi naam ho to No. 1 par aaye
+           score DESC 
         LIMIT 50;
       `;
-      const values = [query, `%${query}%`];
+      // $1 = exact query, $2 = partial match, $3 = starts with match
+      const values = [query, `%${query}%`, `${query}%`];
       const result = await pool.query(sql, values);
       
       return res.status(200).json({ data: result.rows, total: result.rows.length });
     } else {
-      // Normal loading logic
       const sql = `SELECT "Titles", "Links" FROM novels LIMIT 21 OFFSET $1;`;
       const values = [parseInt(offset)];
       const result = await pool.query(sql, values);
