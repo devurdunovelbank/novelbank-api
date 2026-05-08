@@ -1,5 +1,5 @@
 export default async function handler(req, res) {
-  // CORS Headers (Aapki Blogger website ko allow karne ke liye)
+  // CORS Headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -13,9 +13,13 @@ export default async function handler(req, res) {
   const XATA_API_KEY = process.env.XATA_API_KEY;
   const XATA_REST_URL = process.env.XATA_REST_URL;
 
+  // CHECK 1: Agar Vercel mein Keys save nahi huin
+  if (!XATA_API_KEY || !XATA_REST_URL) {
+      return res.status(500).json({ error: "Vercel Environment Variables Missing!" });
+  }
+
   try {
     if (query) {
-      // 1. FUZZY SEARCH (Jab user kuch search kare)
       const fetchRes = await fetch(`${XATA_REST_URL}/search`, {
         method: 'POST',
         headers: {
@@ -25,16 +29,22 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           query: query,
           tables: ["novels"],
-          fuzziness: 1, // Ye har qisam ki spelling mistake theek karega
+          fuzziness: 1,
           prefix: "phrase"
         })
       });
+      
       const data = await fetchRes.json();
+      
+      // CHECK 2: Agar Xata ne error diya (e.g. Galat API Key)
+      if (!fetchRes.ok) {
+         return res.status(fetchRes.status).json({ error: "Xata Search Error", details: data });
+      }
+
       const results = data.records ? data.records.map(r => ({ Titles: r.Titles, Links: r.Links })) : [];
       return res.status(200).json({ data: results, total: results.length });
       
     } else {
-      // 2. NORMAL LOAD (Jab user library scroll kare)
       const fetchRes = await fetch(`${XATA_REST_URL}/sql`, {
         method: 'POST',
         headers: {
@@ -45,10 +55,18 @@ export default async function handler(req, res) {
           statement: `SELECT "Titles", "Links" FROM novels LIMIT 21 OFFSET ${parseInt(offset)};`
         })
       });
+      
       const data = await fetchRes.json();
+      
+      // CHECK 3: Agar SQL me masla hai
+      if (!fetchRes.ok) {
+         return res.status(fetchRes.status).json({ error: "Xata SQL Error", details: data });
+      }
+
       return res.status(200).json({ data: data.records || [], total: 78500 });
     }
   } catch (error) {
-    return res.status(500).json({ error: 'Server Error' });
+    // CHECK 4: Agar Code phat jaye
+    return res.status(500).json({ error: 'System Error', message: error.message });
   }
 }
