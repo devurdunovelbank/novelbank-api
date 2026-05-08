@@ -1,11 +1,12 @@
 const { Pool } = require('pg');
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false } // SSL connection ko mazeed behtar banane ke liye
 });
 
 export default async function handler(req, res) {
-  // CORS Headers
+  // Blogger ke liye CORS Headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
@@ -17,38 +18,50 @@ export default async function handler(req, res) {
 
   try {
     if (query) {
-      // 1. Search term ko words mein torein (e.g. "Bharam", "Baqa", "batil")
-      const words = query.trim().split(/\s+/).filter(w => w.length > 0);
-      
-      // 2. OR Logic: Agar novel ke naam mein koi bhi ek lafz mil jaye to dikha do
-      // Hum exact "Titles" use kar rahe hain double quotes ke sath
-      const conditions = words.map((_, i) => `"Titles" ILIKE $${i + 1}`).join(' OR ');
-      const values = words.map(w => `%${w}%`);
+      // 1. "Bharam Baqa batil" ko "%Bharam%Baqa%batil%" mein badalna
+      // Is se agar beech mein koi aur lafz bhi hua (jaise 'by') to ye usay dhoond lega
+      const searchPattern = `%${query.trim().replace(/\s+/g, '%')}%`;
 
-      // 3. Query: Results ko order karein taake lambay matches upar aayen
+      // 2. Hum check karenge "Titles" (Capital T) aur titles (Small t) dono ko
+      // Taake column name ka koi bhi masla hamesha ke liye khatam ho jaye
       const sql = `
-        SELECT "Titles", "Links" 
-        FROM novels 
-        WHERE ${conditions} 
-        ORDER BY LENGTH("Titles") ASC 
+        SELECT * FROM novels 
+        WHERE "Titles" ILIKE $1 
+           OR "titles" ILIKE $1
         LIMIT 50;
       `;
       
-      const result = await pool.query(sql, values);
+      const result = await pool.query(sql, [searchPattern]);
       
+      // Data format ko sahi karke bhejna
+      const formattedData = result.rows.map(row => ({
+          Titles: row.Titles || row.titles,
+          Links: row.Links || row.links
+      }));
+
       return res.status(200).json({ 
-        data: result.rows, 
-        total: result.rows.length 
+        data: formattedData, 
+        total: formattedData.length 
       });
 
     } else {
       // Library Pagination
-      const sql = `SELECT "Titles", "Links" FROM novels LIMIT 21 OFFSET $1;`;
+      const sql = `SELECT * FROM novels LIMIT 21 OFFSET $1;`;
       const result = await pool.query(sql, [parseInt(offset) || 0]);
-      return res.status(200).json({ data: result.rows, total: 78500 });
+      
+      const formattedData = result.rows.map(row => ({
+          Titles: row.Titles || row.titles,
+          Links: row.Links || row.links
+      }));
+
+      return res.status(200).json({ data: formattedData, total: 78500 });
     }
   } catch (error) {
-    // Agar koi masla ho to yahan error nazar aayega
-    return res.status(500).json({ error: 'DATABASE_ERROR', message: error.message });
+    // Agar query fail ho to exact error message return karein
+    return res.status(500).json({ 
+        error: 'DATABASE_ERROR', 
+        msg: error.message,
+        hint: "Check if your table name is exactly 'novels' in Xata dashboard"
+    });
   }
 }
